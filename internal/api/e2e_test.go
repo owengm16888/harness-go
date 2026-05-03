@@ -52,7 +52,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *core.Engine) {
 func TestE2E_HealthCheck(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
-	resp, err := http.Get(ts.URL + "/api/monitor/health")
+	resp, err := http.Get(ts.URL + "/health")
 	if err != nil {
 		t.Fatalf("Health check failed: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 		"description": "Implement user authentication",
 		"priority": 8
 	}`
-	resp, err := client.Post(ts.URL+"/api/tasks", "application/json", bytes.NewBufferString(taskJSON))
+	resp, err := client.Post(ts.URL+"/api/v1/tasks", "application/json", bytes.NewBufferString(taskJSON))
 	if err != nil {
 		t.Fatalf("Create task failed: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 	}
 
 	// 2. 获取任务
-	resp, err = client.Get(ts.URL + "/api/tasks/e2e-task-1")
+	resp, err = client.Get(ts.URL + "/api/v1/tasks/e2e-task-1")
 	if err != nil {
 		t.Fatalf("Get task failed: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 	}
 
 	// 3. 列出任务
-	resp, err = client.Get(ts.URL + "/api/tasks")
+	resp, err = client.Get(ts.URL + "/api/v1/tasks")
 	if err != nil {
 		t.Fatalf("List tasks failed: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestE2E_KnowledgeWorkflow(t *testing.T) {
 		"content": "How to implement OAuth2 with PKCE",
 		"tags": ["auth", "oauth"]
 	}`
-	resp, err := client.Post(ts.URL+"/api/knowledge", "application/json", bytes.NewBufferString(entryJSON))
+	resp, err := client.Post(ts.URL+"/api/v1/knowledge", "application/json", bytes.NewBufferString(entryJSON))
 	if err != nil {
 		t.Fatalf("Add knowledge failed: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestE2E_KnowledgeWorkflow(t *testing.T) {
 	}
 
 	// 搜索知识
-	resp, err = client.Get(ts.URL + "/api/knowledge/search?q=OAuth2")
+	resp, err = client.Get(ts.URL + "/api/v1/knowledge/search?q=OAuth2")
 	if err != nil {
 		t.Fatalf("Search knowledge failed: %v", err)
 	}

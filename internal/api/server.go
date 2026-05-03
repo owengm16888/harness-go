@@ -65,11 +65,17 @@ func (s *Server) setupRoutes() {
 	v1.HandleFunc("/knowledge", s.addKnowledge).Methods("POST")
 	v1.HandleFunc("/knowledge", s.listKnowledge).Methods("GET")
 	v1.HandleFunc("/knowledge/search", s.searchKnowledge).Methods("GET")
+	v1.HandleFunc("/knowledge/{id}", s.getKnowledge).Methods("GET")
+	v1.HandleFunc("/knowledge/{id}", s.updateKnowledge).Methods("PUT")
+	v1.HandleFunc("/knowledge/{id}", s.deleteKnowledge).Methods("DELETE")
 
 	// 模式 API
 	v1.HandleFunc("/patterns", s.addPattern).Methods("POST")
 	v1.HandleFunc("/patterns", s.listPatterns).Methods("GET")
 	v1.HandleFunc("/patterns/match", s.matchPattern).Methods("POST")
+	v1.HandleFunc("/patterns/{id}", s.getPattern).Methods("GET")
+	v1.HandleFunc("/patterns/{id}", s.updatePattern).Methods("PUT")
+	v1.HandleFunc("/patterns/{id}", s.deletePattern).Methods("DELETE")
 
 	// 监控 API
 	v1.HandleFunc("/metrics", s.getMetrics).Methods("GET")
@@ -321,18 +327,107 @@ func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {
 
 // addKnowledge 添加知识
 func (s *Server) addKnowledge(w http.ResponseWriter, r *http.Request) {
-	// TODO: 实现
-	s.writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "not implemented",
-	})
+	var entry models.KnowledgeEntry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// 设置默认 ID
+	if entry.ID == "" {
+		entry.ID = fmt.Sprintf("kb-%d", time.Now().UnixNano())
+	}
+
+	ctx := r.Context()
+
+	if err := s.engine.Knowledge().AddEntry(ctx, entry); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusCreated, entry)
 }
 
 // listKnowledge 列出知识
 func (s *Server) listKnowledge(w http.ResponseWriter, r *http.Request) {
-	// TODO: 实现
-	s.writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "not implemented",
-	})
+	ctx := r.Context()
+
+	// 解析分页参数
+	offset := 0
+	limit := 50
+	if v := r.URL.Query().Get("offset"); v != "" {
+		fmt.Sscanf(v, "%d", &offset)
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		fmt.Sscanf(v, "%d", &limit)
+		if limit > 200 {
+			limit = 200
+		}
+	}
+
+	entries, err := s.engine.Knowledge().ListEntries(ctx, offset, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// 返回空数组而非 null
+	if entries == nil {
+		entries = []*models.KnowledgeEntry{}
+	}
+
+	s.writeJSON(w, http.StatusOK, entries)
+}
+
+// getKnowledge 获取单条知识
+func (s *Server) getKnowledge(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	ctx := r.Context()
+
+	entry, err := s.engine.Knowledge().GetEntry(ctx, id)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, entry)
+}
+
+// updateKnowledge 更新知识
+func (s *Server) updateKnowledge(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	ctx := r.Context()
+
+	var update models.KnowledgeUpdate
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := s.engine.Knowledge().UpdateEntry(ctx, id, update); err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// 返回更新后的条目
+	entry, _ := s.engine.Knowledge().GetEntry(ctx, id)
+	s.writeJSON(w, http.StatusOK, entry)
+}
+
+// deleteKnowledge 删除知识
+func (s *Server) deleteKnowledge(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	ctx := r.Context()
+
+	if err := s.engine.Knowledge().DeleteEntry(ctx, id); err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
 // searchKnowledge 搜索知识
@@ -351,31 +446,128 @@ func (s *Server) searchKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 返回空数组而非 null
+	if results == nil {
+		results = []*models.KnowledgeEntry{}
+	}
+
 	s.writeJSON(w, http.StatusOK, results)
 }
 
 // addPattern 添加模式
 func (s *Server) addPattern(w http.ResponseWriter, r *http.Request) {
-	// TODO: 实现
-	s.writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "not implemented",
-	})
+	var pattern models.Pattern
+	if err := json.NewDecoder(r.Body).Decode(&pattern); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// 设置默认 ID
+	if pattern.ID == "" {
+		pattern.ID = fmt.Sprintf("pat-%d", time.Now().UnixNano())
+	}
+
+	ctx := r.Context()
+
+	if err := s.engine.Pattern().AddPattern(ctx, pattern); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusCreated, pattern)
 }
 
 // listPatterns 列出模式
 func (s *Server) listPatterns(w http.ResponseWriter, r *http.Request) {
-	// TODO: 实现
-	s.writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "not implemented",
-	})
+	ctx := r.Context()
+
+	patterns, err := s.engine.Pattern().ListPatterns(ctx)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// 返回空数组而非 null
+	if patterns == nil {
+		patterns = []*models.Pattern{}
+	}
+
+	s.writeJSON(w, http.StatusOK, patterns)
+}
+
+// getPattern 获取单条模式
+func (s *Server) getPattern(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	ctx := r.Context()
+
+	pattern, err := s.engine.Pattern().GetPattern(ctx, id)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, pattern)
+}
+
+// updatePattern 更新模式
+func (s *Server) updatePattern(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	ctx := r.Context()
+
+	var update models.PatternUpdate
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := s.engine.Pattern().UpdatePattern(ctx, id, update); err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// 返回更新后的模式
+	pattern, _ := s.engine.Pattern().GetPattern(ctx, id)
+	s.writeJSON(w, http.StatusOK, pattern)
+}
+
+// deletePattern 删除模式
+func (s *Server) deletePattern(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	ctx := r.Context()
+
+	if err := s.engine.Pattern().DeletePattern(ctx, id); err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
 // matchPattern 匹配模式
 func (s *Server) matchPattern(w http.ResponseWriter, r *http.Request) {
-	// TODO: 实现
-	s.writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "not implemented",
-	})
+	var task models.Task
+	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body: expected Task JSON")
+		return
+	}
+
+	ctx := r.Context()
+
+	matched, err := s.engine.Pattern().Match(ctx, task)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// 返回空数组而非 null
+	if matched == nil {
+		matched = []*models.Pattern{}
+	}
+
+	s.writeJSON(w, http.StatusOK, matched)
 }
 
 // getMetrics 获取指标

@@ -1,9 +1,8 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -93,7 +92,7 @@ func setupTestServerLocal(t *testing.T) (*Server, *core.Engine) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	server, _ := setupTestServer(t)
+	server, _ := setupTestServerLocal(t)
 
 	req, err := http.NewRequest("GET", "/health", nil)
 	if err != nil {
@@ -101,8 +100,7 @@ func TestHealthCheck(t *testing.T) {
 	}
 
 	rr := httptest.NewRecorder()
-	router := server.router
-	router.ServeHTTP(rr, req)
+	server.router.ServeHTTP(rr, req)
 
 	if status := rr.Code; status != http.StatusOK {
 		t.Errorf("Handler returned wrong status code: got %v want %v", status, http.StatusOK)
