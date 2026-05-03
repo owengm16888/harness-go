@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  harness:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: harness
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./harness.yaml:/app/harness.yaml
+    environment:
+      - HERMES_API_KEY=${HERMES_API_KEY}
+      - HARNESS_CONFIG=/app/harness.yaml
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - harness-network
+
+  # 可选: Redis 缓存
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: harness-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - harness-network
+
+  # 可选: PostgreSQL 数据库
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: harness-postgres
+  #   ports:
+  #     - "5432:5432"
+  #   environment:
+  #     - POSTGRES_DB=harness
+  #     - POSTGRES_USER=harness
+  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   networks:
+  #     - harness-network
+
+networks:
+  harness-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:

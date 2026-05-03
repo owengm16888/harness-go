@@ -1,0 +1,360 @@
+openapi: "3.0.3"
+info:
+  title: Harness Engine - Sessions & State API
+  description: |
+    Harness Engineering 框架的会话与状态管理 API。
+
+    ## 概述
+    Session 是 Harness 的核心运行时单元，每个 Session 关联一个 Agent 环境
+    (Claude Code / Hermes / Codex CLI)，并维护完整的状态快照历史。
+
+    ## 状态更新类型
+    - `add_task` — 向会话添加新任务
+    - `update_task` — 更新已有任务
+    - `set_context` — 设置会话上下文
+  version: "1.0.0"
+  contact:
+    name: Harness Engineering
+    url: https://github.com/harness-engineering/harness
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: 本地开发服务器
+
+tags:
+  - name: Sessions
+    description: 会话生命周期管理
+
+paths:
+  /api/sessions:
+    post:
+      tags: [Sessions]
+      summary: 创建会话
+      description: |
+        创建一个新的 Agent 会话。每个会话绑定一个运行环境
+        (claude-code / hermes / codex)，初始化空状态，生成唯一 ID。
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+            example:
+              environment: "claude-code"
+      responses:
+        "201":
+          description: 会话创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+              example:
+                id: "1714656000000000001"
+                environment: "claude-code"
+                state:
+                  session_id: "1714656000000000001"
+                  environment: "claude-code"
+                  tasks: []
+                  context: {}
+                  timestamp: "2026-05-02T17:18:00Z"
+                history: []
+                created_at: "2026-05-02T17:18:00Z"
+                updated_at: "2026-05-02T17:18:00Z"
+        "400":
+          description: 请求体格式错误
+          content:
+            text/plain:
+              example: "invalid request body"
+        "500":
+          description: 内部服务器错误
+          content:
+            text/plain:
+              example: "Internal Server Error"
+
+    get:
+      tags: [Sessions]
+      summary: 列出所有会话
+      description: 返回系统中所有活跃会话的列表。
+      operationId: listSessions
+      responses:
+        "200":
+          description: 会话列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+        "500":
+          description: 内部服务器错误
+          content:
+            text/plain:
+              example: "Internal Server Error"
+
+  /api/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+
+    get:
+      tags: [Sessions]
+      summary: 获取会话详情
+      description: 根据 ID 获取单个会话的完整信息，包括当前状态和历史快照。
+      operationId: getSession
+      responses:
+        "200":
+          description: 会话详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          description: 会话不存在
+          content:
+            text/plain:
+              example: "session not found"
+        "500":
+          description: 内部服务器错误
+          content:
+            text/plain:
+              example: "Internal Server Error"
+
+  /api/sessions/{id}/state:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+
+    get:
+      tags: [Sessions]
+      summary: 获取会话状态
+      description: |
+        获取会话的当前状态快照，包含关联的任务列表和上下文数据。
+        与 `getSession` 不同，此端点仅返回 `State` 对象，不含历史记录。
+      operationId: getSessionState
+      responses:
+        "200":
+          description: 当前状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/State"
+              example:
+                session_id: "1714656000000000001"
+                environment: "claude-code"
+                tasks:
+                  - id: "task-001"
+                    type: "code_review"
+                    description: "Review PR #42"
+                    context: {}
+                    constraints: []
+                    priority: 1
+                context:
+                  repo: "my-project"
+                  branch: "main"
+                timestamp: "2026-05-02T17:20:00Z"
+        "404":
+          description: 会话不存在
+          content:
+            text/plain:
+              example: "session not found"
+        "500":
+          description: 内部服务器错误
+          content:
+            text/plain:
+              example: "Internal Server Error"
+
+  /api/sessions/{id}/history:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+
+    get:
+      tags: [Sessions]
+      summary: 获取状态历史
+      description: |
+        获取会话的所有历史状态快照。每次状态变更 (`add_task`,
+        `update_task`, `set_context`) 都会在变更前创建一个快照，
+        形成完整的历史链。
+      operationId: getSessionHistory
+      responses:
+        "200":
+          description: 历史快照列表（按时间倒序）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StateSnapshot"
+        "404":
+          description: 会话不存在
+          content:
+            text/plain:
+              example: "session not found"
+        "500":
+          description: 内部服务器错误
+          content:
+            text/plain:
+              example: "Internal Server Error"
+
+components:
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      description: 会话唯一标识符（由 `POST /api/sessions` 返回）
+      schema:
+        type: string
+      example: "1714656000000000001"
+
+  schemas:
+    CreateSessionRequest:
+      type: object
+      required: [environment]
+      properties:
+        environment:
+          type: string
+          description: Agent 运行环境标识
+          enum: [claude-code, hermes, codex]
+          example: "claude-code"
+
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 会话唯一 ID (UnixNano 时间戳)
+          example: "1714656000000000001"
+        environment:
+          type: string
+          description: Agent 运行环境
+          example: "claude-code"
+        state:
+          $ref: "#/components/schemas/State"
+        history:
+          type: array
+          description: 状态快照历史（每次变更前自动记录）
+          items:
+            $ref: "#/components/schemas/StateSnapshot"
+        created_at:
+          type: string
+          format: date-time
+          description: 会话创建时间
+          example: "2026-05-02T17:18:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: 最后更新时间
+          example: "2026-05-02T17:20:00Z"
+
+    State:
+      type: object
+      description: 会话当前状态快照
+      properties:
+        session_id:
+          type: string
+          description: 关联的会话 ID
+          example: "1714656000000000001"
+        environment:
+          type: string
+          description: Agent 运行环境
+          example: "claude-code"
+        tasks:
+          type: array
+          description: 会话关联的任务列表
+          items:
+            $ref: "#/components/schemas/Task"
+        context:
+          type: object
+          additionalProperties: true
+          description: 会话上下文数据（自由键值对）
+          example:
+            repo: "my-project"
+            branch: "main"
+        timestamp:
+          type: string
+          format: date-time
+          description: 状态创建时间
+          example: "2026-05-02T17:20:00Z"
+
+    StateSnapshot:
+      type: object
+      description: 状态变更前的历史快照
+      properties:
+        state:
+          $ref: "#/components/schemas/State"
+        timestamp:
+          type: string
+          format: date-time
+          description: 快照记录时间
+          example: "2026-05-02T17:19:00Z"
+        reason:
+          type: string
+          description: 触发快照的状态变更类型
+          enum: [add_task, update_task, set_context]
+          example: "add_task"
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 任务唯一 ID
+          example: "task-001"
+        type:
+          type: string
+          description: 任务类型
+          example: "code_review"
+        description:
+          type: string
+          description: 任务描述
+          example: "Review PR #42"
+        context:
+          type: object
+          additionalProperties: true
+          description: 任务上下文
+          example: {}
+        constraints:
+          type: array
+          description: 任务约束条件
+          items:
+            $ref: "#/components/schemas/Constraint"
+        priority:
+          type: integer
+          description: 优先级（数值越小优先级越高）
+          example: 1
+        deadline:
+          type: string
+          format: date-time
+          description: 截止时间（可选）
+          nullable: true
+
+    Constraint:
+      type: object
+      properties:
+        type:
+          type: string
+          description: 约束类型
+          example: "file_scope"
+        rule:
+          type: string
+          description: 约束规则表达式
+          example: "only_modify:src/**"
+        severity:
+          type: string
+          description: 违反约束的严重程度
+          enum: [info, warning, error, critical]
+          example: "error"
+        message:
+          type: string
+          description: 违反约束时的提示信息
+          example: "不允许修改 src 目录外的文件"
+
+    Error:
+      type: object
+      description: 错误响应（统一文本格式）
+      properties:
+        message:
+          type: string
+          description: 错误描述
+          example: "session not found"

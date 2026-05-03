@@ -1,0 +1,48 @@
+server:
+  addr: ":8088"
+  timeout: 30s
+  api_key: ""
+
+engine:
+  max_concurrent_tasks: 10
+  task_timeout: 5m
+  retry_count: 3
+
+adapters:
+  claude_code:
+    enabled: true
+    root_dir: "."
+    hooks_path: ".claude-plugin/hooks.json"
+    plans_path: "Plans.md"
+
+  hermes:
+    enabled: false
+    url: "http://localhost:3000"
+    api_key: ""
+
+  codex_cli:
+    enabled: false
+    root_dir: "."
+    agents_path: "AGENTS.md"
+
+storage:
+  type: "sqlite"
+  path: "./data/harness.db"
+
+knowledge:
+  max_entries: 10000
+  index_type: "memory"
+
+patterns:
+  min_samples: 5
+  threshold: 0.7
+
+feedback:
+  max_retries: 3
+  retry_delay: 1s
+  auto_fix: true
+
+monitor:
+  enabled: true
+  metrics_port: 9090
+  log_level: "info"

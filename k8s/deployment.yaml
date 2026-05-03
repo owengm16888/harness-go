@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: harness
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harness
+  namespace: harness
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: harness
+  template:
+    metadata:
+      labels:
+        app: harness
+    spec:
+      containers:
+      - name: harness
+        image: harness:latest
+        ports:
+        - containerPort: 8080
+        - containerPort: 9090
+        env:
+        - name: HERMES_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: harness-secrets
+              key: hermes-api-key
+        volumeMounts:
+        - name: data
+          mountPath: /app/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /api/monitor/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/monitor/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: harness-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harness
+  namespace: harness
+spec:
+  selector:
+    app: harness
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: harness-data
+  namespace: harness
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: harness-secrets
+  namespace: harness
+type: Opaque
+data:
+  hermes-api-key: "" # Base64 encoded
