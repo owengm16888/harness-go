@@ -13,6 +13,7 @@ import (
 	"github.com/harness-engineering/harness/models"
 	"github.com/harness-engineering/harness/pkg/cache"
 	pkgevent "github.com/harness-engineering/harness/pkg/event"
+	"github.com/harness-engineering/harness/pkg/resilience"
 	pkgwebhook "github.com/harness-engineering/harness/pkg/webhook"
 )
 
@@ -44,6 +45,7 @@ type Engine struct {
 	eventBus      *pkgevent.EventBus
 	cache         *cache.MemoryCache
 	webhooks      *pkgwebhook.WebhookManager
+	fallbackOrder []string // 适配器降级顺序
 	shutdownOnce  sync.Once
 	shutdownCh    chan struct{}
 }
@@ -129,7 +131,7 @@ func NewEngine(cfg *config.Config, store storage.Storage) (*Engine, error) {
 	return engine, nil
 }
 
-// RegisterAdapter 注册适配器
+// RegisterAdapter 注册适配器（自动用 ResilientAdapter 包装）
 func (e *Engine) RegisterAdapter(name string, adapter Adapter) error {
 	if name == "" {
 		return fmt.Errorf("adapter name is required")
@@ -145,9 +147,78 @@ func (e *Engine) RegisterAdapter(name string, adapter Adapter) error {
 		return fmt.Errorf("adapter already registered: %s", name)
 	}
 
-	e.adapters[name] = adapter
-	slog.Info("adapter registered", "name", name)
+	// 用 ResilientAdapter 包装 (熔断 + 重试)
+	wrapped := NewResilientAdapterWrapper(adapter, name)
+	e.adapters[name] = wrapped
+
+	// 添加到降级顺序
+	e.fallbackOrder = append(e.fallbackOrder, name)
+
+	slog.Info("adapter registered", "name", name, "resilient", true)
 	return nil
+}
+
+// ExecuteTaskWithFallback 带降级的任务执行
+// 如果指定适配器失败 (熔断/不可用)，自动尝试下一个适配器
+func (e *Engine) ExecuteTaskWithFallback(ctx context.Context, adapterName string, task models.Task) (*models.Result, error) {
+	// 先尝试指定的适配器
+	result, err := e.ExecuteTask(ctx, adapterName, task)
+	if err == nil {
+		return result, nil
+	}
+
+	slog.Warn("adapter failed, trying fallback",
+		"adapter", adapterName, "error", err)
+
+	// 遍历降级顺序，找下一个可用的适配器
+	e.mu.RLock()
+	fallbackOrder := make([]string, len(e.fallbackOrder))
+	copy(fallbackOrder, e.fallbackOrder)
+	e.mu.RUnlock()
+
+	for _, fallbackName := range fallbackOrder {
+		if fallbackName == adapterName {
+			continue // 跳过已经失败的
+		}
+
+		// 检查熔断器状态
+		if adapter, ok := e.adapters[fallbackName]; ok {
+			if w, ok := adapter.(*resilientAdapterWrapper); ok {
+				if w.GetCircuitState() == "open" {
+					slog.Debug("fallback adapter circuit open, skipping",
+						"adapter", fallbackName)
+					continue
+				}
+			}
+		}
+
+		slog.Info("trying fallback adapter", "adapter", fallbackName)
+		result, err := e.ExecuteTask(ctx, fallbackName, task)
+		if err == nil {
+			return result, nil
+		}
+
+		slog.Warn("fallback adapter also failed",
+			"adapter", fallbackName, "error", err)
+	}
+
+	return nil, fmt.Errorf("all adapters failed for task %s", task.ID)
+}
+
+// GetAdapterCircuitStates 获取所有适配器的熔断器状态
+func (e *Engine) GetAdapterCircuitStates() map[string]string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	states := make(map[string]string)
+	for name, adapter := range e.adapters {
+		if w, ok := adapter.(*resilientAdapterWrapper); ok {
+			states[name] = w.GetCircuitState()
+		} else {
+			states[name] = "n/a"
+		}
+	}
+	return states
 }
 
 // Initialize 初始化引擎
@@ -433,6 +504,72 @@ type ConstraintHint struct {
 	Rule     string `json:"rule"`
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
+}
+
+// NewResilientAdapterWrapper 用熔断器+重试包装适配器
+func NewResilientAdapterWrapper(inner Adapter, name string) *resilientAdapterWrapper {
+	return &resilientAdapterWrapper{
+		inner: inner,
+		name:  name,
+		cb: resilience.NewCircuitBreaker(resilience.CircuitBreakerConfig{
+			Name:             fmt.Sprintf("adapter-%s", name),
+			FailureThreshold: 5,
+			SuccessThreshold: 3,
+			Timeout:          30 * time.Second,
+		}),
+		retryCfg: resilience.RetryConfig{
+			MaxAttempts:  3,
+			InitialDelay: time.Second,
+			MaxDelay:     10 * time.Second,
+			Multiplier:   2.0,
+			Jitter:       true,
+		},
+	}
+}
+
+// resilientAdapterWrapper 弹性适配器包装 (熔断 + 重试)
+type resilientAdapterWrapper struct {
+	inner     Adapter
+	name      string
+	cb        *resilience.CircuitBreaker
+	retryCfg  resilience.RetryConfig
+}
+
+func (w *resilientAdapterWrapper) Name() string { return w.name }
+
+func (w *resilientAdapterWrapper) Initialize(ctx context.Context, cfg config.AdapterConfig) error {
+	return w.inner.Initialize(ctx, cfg)
+}
+
+func (w *resilientAdapterWrapper) ExecuteTask(ctx context.Context, task models.Task) (models.Result, error) {
+	var result models.Result
+
+	retryResult := resilience.RetryWithBackoff(ctx, w.retryCfg, func(ctx context.Context) error {
+		if !w.cb.AllowRequest() {
+			return fmt.Errorf("circuit breaker open for adapter %s", w.name)
+		}
+		var err error
+		result, err = w.inner.ExecuteTask(ctx, task)
+		w.cb.RecordResult(err)
+		return err
+	})
+
+	if !retryResult.Success {
+		return result, retryResult.LastError
+	}
+	return result, nil
+}
+
+func (w *resilientAdapterWrapper) GetState(ctx context.Context) (models.State, error) {
+	return w.inner.GetState(ctx)
+}
+
+func (w *resilientAdapterWrapper) Cleanup(ctx context.Context) error {
+	return w.inner.Cleanup(ctx)
+}
+
+func (w *resilientAdapterWrapper) GetCircuitState() string {
+	return w.cb.GetState().String()
 }
 
 // enrichTaskContext 智能上下文注入
