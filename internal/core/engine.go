@@ -230,6 +230,9 @@ func (e *Engine) ExecuteTask(ctx context.Context, adapterName string, task model
 		return nil, fmt.Errorf("task validation failed: %w", err)
 	}
 
+	// 智能上下文注入: 拉取相关知识 + 匹配模式 + 元数据
+	task = e.enrichTaskContext(ctx, task)
+
 	// 记录开始时间
 	startTime := time.Now()
 	slog.Info("task execution started", "task_id", task.ID, "adapter", adapterName)
@@ -406,6 +409,162 @@ func (e *Engine) MessageBus() *collaboration.MessageBus {
 // Orchestrator 获取协作编排器
 func (e *Engine) Orchestrator() *collaboration.Orchestrator {
 	return e.orchestrator
+}
+
+// KnowledgeHint 知识条目精简摘要 (注入到 task.Context)
+type KnowledgeHint struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+}
+
+// PatternHint 模式匹配精简摘要 (注入到 task.Context)
+type PatternHint struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	SuccessRate float64 `json:"success_rate"`
+	UsageCount  int     `json:"usage_count"`
+}
+
+// ConstraintHint 约束条件精简摘要 (注入到 task.Context)
+type ConstraintHint struct {
+	Type     string `json:"type"`
+	Rule     string `json:"rule"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+// enrichTaskContext 智能上下文注入
+// 在任务执行前，自动从知识库、模式引擎拉取相关信息注入 task.Context
+// 让 AI Agent 拿到更多上下文，提升执行质量
+func (e *Engine) enrichTaskContext(ctx context.Context, task models.Task) models.Task {
+	ci := e.config.Engine.ContextInjection
+	if !ci.Enabled {
+		return task
+	}
+
+	// 初始化 context map
+	if task.Context == nil {
+		task.Context = make(map[string]any)
+	}
+
+	// 1. 注入相关知识条目
+	if e.knowledge != nil {
+		cacheKey := fmt.Sprintf("ctx:kb:%s", task.Description)
+		var knowledgeHits []*models.KnowledgeEntry
+
+		if ci.CacheResults {
+			if cached, ok := e.cache.Get(cacheKey); ok {
+				knowledgeHits = cached.([]*models.KnowledgeEntry)
+			}
+		}
+
+		if knowledgeHits == nil {
+			hits, err := e.knowledge.Search(ctx, task.Description, ci.KnowledgeLimit)
+			if err != nil {
+				slog.Warn("context injection: knowledge search failed", "task_id", task.ID, "error", err)
+			} else {
+				knowledgeHits = hits
+			}
+
+			if ci.CacheResults && knowledgeHits != nil {
+				e.cache.Set(cacheKey, knowledgeHits, 2*time.Minute)
+			}
+		}
+
+		if len(knowledgeHits) > 0 {
+			hints := make([]KnowledgeHint, 0, len(knowledgeHits))
+			for _, entry := range knowledgeHits {
+				summary := entry.Content
+				if len(summary) > 200 {
+					summary = summary[:200] + "..."
+				}
+				hints = append(hints, KnowledgeHint{
+					ID:      entry.ID,
+					Title:   entry.Title,
+					Summary: summary,
+				})
+			}
+			task.Context["related_knowledge"] = hints
+			slog.Debug("context injection: knowledge injected",
+				"task_id", task.ID, "count", len(hints))
+		}
+	}
+
+	// 2. 注入匹配模式
+	if e.pattern != nil {
+		cacheKey := fmt.Sprintf("ctx:pat:%s:%s", task.Type, task.Description)
+		var matchedPatterns []*models.Pattern
+
+		if ci.CacheResults {
+			if cached, ok := e.cache.Get(cacheKey); ok {
+				matchedPatterns = cached.([]*models.Pattern)
+			}
+		}
+
+		if matchedPatterns == nil {
+			matches, err := e.pattern.Match(ctx, task)
+			if err != nil {
+				slog.Warn("context injection: pattern match failed", "task_id", task.ID, "error", err)
+			} else {
+				matchedPatterns = matches
+			}
+
+			if ci.CacheResults && matchedPatterns != nil {
+				e.cache.Set(cacheKey, matchedPatterns, 2*time.Minute)
+			}
+		}
+
+		// 限制数量
+		limit := ci.PatternLimit
+		if len(matchedPatterns) > limit {
+			matchedPatterns = matchedPatterns[:limit]
+		}
+
+		if len(matchedPatterns) > 0 {
+			hints := make([]PatternHint, 0, len(matchedPatterns))
+			for _, p := range matchedPatterns {
+				hints = append(hints, PatternHint{
+					ID:          p.ID,
+					Name:        p.Name,
+					Description: p.Description,
+					SuccessRate: p.SuccessRate,
+					UsageCount:  p.UsageCount,
+				})
+			}
+			task.Context["matched_patterns"] = hints
+			slog.Debug("context injection: patterns injected",
+				"task_id", task.ID, "count", len(hints))
+		}
+	}
+
+	// 3. 注入约束摘要
+	if ci.InjectConstraints && len(task.Constraints) > 0 {
+		hints := make([]ConstraintHint, 0, len(task.Constraints))
+		for _, c := range task.Constraints {
+			hints = append(hints, ConstraintHint{
+				Type:     c.Type,
+				Rule:     c.Rule,
+				Severity: string(c.Severity),
+				Message:  c.Message,
+			})
+		}
+		task.Context["constraints_summary"] = hints
+	}
+
+	// 4. 注入任务元数据
+	if ci.InjectMetadata {
+		task.Context["_meta"] = map[string]any{
+			"task_id":      task.ID,
+			"task_type":    task.Type,
+			"priority":     task.Priority,
+			"has_deadline": task.Deadline != nil,
+			"enriched_at":  time.Now().Format(time.RFC3339),
+		}
+	}
+
+	return task
 }
 
 // validateTask 验证任务

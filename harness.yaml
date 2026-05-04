@@ -7,6 +7,13 @@ engine:
   max_concurrent_tasks: 10
   task_timeout: 5m
   retry_count: 3
+  context_injection:
+    enabled: true
+    knowledge_limit: 5
+    pattern_limit: 3
+    cache_results: true
+    inject_constraints: true
+    inject_metadata: true
 
 adapters:
   claude_code:

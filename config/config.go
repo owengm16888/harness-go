@@ -33,6 +33,17 @@ type EngineConfig struct {
 	MaxConcurrentTasks int           `yaml:"max_concurrent_tasks"`
 	TaskTimeout        time.Duration `yaml:"task_timeout"`
 	RetryCount         int           `yaml:"retry_count"`
+	ContextInjection   ContextInjectionConfig `yaml:"context_injection"`
+}
+
+// ContextInjectionConfig 上下文注入配置
+type ContextInjectionConfig struct {
+	Enabled           bool `yaml:"enabled"`            // 是否启用智能上下文注入
+	KnowledgeLimit    int  `yaml:"knowledge_limit"`    // 注入知识条目上限
+	PatternLimit      int  `yaml:"pattern_limit"`      // 注入匹配模式上限
+	CacheResults      bool `yaml:"cache_results"`      // 是否缓存注入结果
+	InjectConstraints bool `yaml:"inject_constraints"` // 是否注入约束摘要
+	InjectMetadata    bool `yaml:"inject_metadata"`    // 是否注入任务元数据
 }
 
 // AdaptersConfig 适配器配置
@@ -134,6 +145,16 @@ func (c *Config) setDefaults() {
 	}
 	if c.Engine.RetryCount == 0 {
 		c.Engine.RetryCount = 3
+	}
+	if c.Engine.ContextInjection.KnowledgeLimit == 0 {
+		c.Engine.ContextInjection.KnowledgeLimit = 5
+	}
+	if c.Engine.ContextInjection.PatternLimit == 0 {
+		c.Engine.ContextInjection.PatternLimit = 3
+	}
+	// 默认启用上下文注入
+	if !c.Engine.ContextInjection.Enabled {
+		// Enabled 默认 false，需显式开启
 	}
 	if c.Storage.Type == "" {
 		c.Storage.Type = "sqlite"
