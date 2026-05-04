@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -108,6 +110,53 @@ func (p *OpenAIProvider) ChatWithSystem(ctx context.Context, system string, mess
 	}
 
 	return fmt.Sprintf("[OpenAI %s] 基于 %d 条消息生成回复", p.model, len(messages)), nil
+}
+
+// ============================================================
+// Claude CLI 适配器 — 通过 claude 命令行调用
+// ============================================================
+
+// ClaudeCLIProvider 通过 claude CLI 调用 LLM
+type ClaudeCLIProvider struct {
+	binPath string
+}
+
+// NewClaudeCLIProvider 创建 Claude CLI 提供者
+func NewClaudeCLIProvider() *ClaudeCLIProvider {
+	return &ClaudeCLIProvider{binPath: "claude"}
+}
+
+func (p *ClaudeCLIProvider) Name() string {
+	return "claude-cli"
+}
+
+func (p *ClaudeCLIProvider) Chat(ctx context.Context, messages []LLMMessage) (string, error) {
+	return p.ChatWithSystem(ctx, "", messages)
+}
+
+func (p *ClaudeCLIProvider) ChatWithSystem(ctx context.Context, system string, messages []LLMMessage) (string, error) {
+	// 合并所有消息为单个 prompt
+	var sb strings.Builder
+	if system != "" {
+		sb.WriteString(system)
+		sb.WriteString("\n\n")
+	}
+	for _, msg := range messages {
+		if msg.Role == "assistant" {
+			sb.WriteString("Assistant: ")
+		} else {
+			sb.WriteString("Human: ")
+		}
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n\n")
+	}
+
+	cmd := exec.CommandContext(ctx, p.binPath, "-p", sb.String())
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("claude CLI failed: %w, output: %s", err, string(output))
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // ============================================================

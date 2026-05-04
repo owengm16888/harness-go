@@ -44,7 +44,34 @@ func (m *Matcher) Match(ctx context.Context, task models.Task, pattern *models.P
 
 // registerDefaultRules 注册默认规则
 func (m *Matcher) registerDefaultRules() {
-	// 触发器匹配规则
+	// 类型匹配规则
+	m.rules = append(m.rules, MatchRule{
+		Name: "type_match",
+		Type: "string",
+		Condition: func(ctx context.Context, task models.Task, pattern *models.Pattern) bool {
+			// 先查 pattern.Metadata 里的 task_type
+			if taskType, ok := pattern.Metadata["task_type"]; ok {
+				return task.Type == taskType
+			}
+			// 再用 trigger 和 task.Type 做模糊匹配
+			if pattern.Trigger != "" {
+				triggerLower := strings.ToLower(pattern.Trigger)
+				taskTypeLower := strings.ToLower(task.Type)
+				descLower := strings.ToLower(task.Description)
+				// trigger 匹配 task.Type 或 task.Description
+				if strings.Contains(taskTypeLower, triggerLower) || strings.Contains(triggerLower, taskTypeLower) {
+					return true
+				}
+				if strings.Contains(descLower, triggerLower) {
+					return true
+				}
+			}
+			return false
+		},
+		Priority: 9,
+	})
+
+	// 触发器匹配规则 (保留原有逻辑)
 	m.rules = append(m.rules, MatchRule{
 		Name: "trigger_match",
 		Type: "string",
@@ -52,19 +79,6 @@ func (m *Matcher) registerDefaultRules() {
 			return m.matchTrigger(task, pattern.Trigger)
 		},
 		Priority: 10,
-	})
-
-	// 类型匹配规则
-	m.rules = append(m.rules, MatchRule{
-		Name: "type_match",
-		Type: "string",
-		Condition: func(ctx context.Context, task models.Task, pattern *models.Pattern) bool {
-			if taskType, ok := pattern.Metadata["task_type"]; ok {
-				return task.Type == taskType
-			}
-			return false
-		},
-		Priority: 8,
 	})
 
 	// 上下文匹配规则

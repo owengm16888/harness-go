@@ -3,6 +3,7 @@ package routine
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -12,7 +13,8 @@ import (
 
 // InterviewerAgent 面试官 Agent
 type InterviewerAgent struct {
-	name string
+	name     string
+	provider LLMProvider
 }
 
 // NewInterviewerAgent 创建面试官 Agent
@@ -29,7 +31,10 @@ func (a *InterviewerAgent) Role() AgentRole {
 }
 
 func (a *InterviewerAgent) Execute(ctx context.Context, input AgentInput) (*AgentOutput, error) {
-	// 第一轮：开场问题
+	fmt.Fprintf(os.Stderr, "[DEBUG] interviewer.Execute: provider=%v, round=%d\n", a.provider != nil, input.Round)
+	if a.provider != nil {
+		return a.executeLLM(ctx, input)
+	}
 	if input.Round == 0 {
 		return &AgentOutput{
 			Content: a.getOpeningQuestion(input),
@@ -47,6 +52,25 @@ func (a *InterviewerAgent) Execute(ctx context.Context, input AgentInput) (*Agen
 		Content: a.getDefaultQuestion(input),
 		NextAction: "wait_answer",
 	}, nil
+}
+
+func (a *InterviewerAgent) executeLLM(ctx context.Context, input AgentInput) (*AgentOutput, error) {
+	system := "你是一位资深Go语言面试官。规则：一次只问一个问题；回答正确提高难度；只输出问题；用中文提问。"
+	var messages []LLMMessage
+	for _, msg := range input.History {
+		role := "user"
+		if msg.Role == "interviewer" { role = "assistant" }
+		messages = append(messages, LLMMessage{Role: role, Content: msg.Content})
+	}
+	if input.Round > 0 && input.Answer != "" {
+		messages = append(messages, LLMMessage{Role: "user", Content: input.Answer})
+	}
+	if input.Round == 0 {
+		messages = append(messages, LLMMessage{Role: "user", Content: "请开始面试，提出第一个Go技术问题。"})
+	}
+	resp, err := a.provider.ChatWithSystem(ctx, system, messages)
+	if err != nil { return nil, err }
+	return &AgentOutput{Content: resp, NextAction: "wait_answer"}, nil
 }
 
 // getOpeningQuestion 获取开场问题
@@ -138,7 +162,8 @@ func (a *InterviewerAgent) getDefaultQuestion(input AgentInput) string {
 
 // EvaluatorAgent 评估 Agent
 type EvaluatorAgent struct {
-	name string
+	name     string
+	provider LLMProvider
 }
 
 // NewEvaluatorAgent 创建评估 Agent
@@ -155,7 +180,8 @@ func (a *EvaluatorAgent) Role() AgentRole {
 }
 
 func (a *EvaluatorAgent) Execute(ctx context.Context, input AgentInput) (*AgentOutput, error) {
-	// 评估候选人回答
+	fmt.Fprintf(os.Stderr, "[DEBUG] evaluator.Execute: provider=%v\n", a.provider != nil)
+	if a.provider != nil { return a.executeLLMEval(ctx, input) }
 	score := a.evaluateAnswer(input.Question, input.Answer)
 
 	return &AgentOutput{
@@ -238,7 +264,8 @@ func (a *EvaluatorAgent) evaluateAnswer(question, answer string) Score {
 
 // FollowupAgent 追问生成器 Agent
 type FollowupAgent struct {
-	name string
+	name     string
+	provider LLMProvider
 }
 
 // NewFollowupAgent 创建追问生成器 Agent
@@ -255,7 +282,7 @@ func (a *FollowupAgent) Role() AgentRole {
 }
 
 func (a *FollowupAgent) Execute(ctx context.Context, input AgentInput) (*AgentOutput, error) {
-	// 根据薄弱点生成追问
+	if a.provider != nil { return a.executeLLMFollowup(ctx, input) }
 	question := a.generateFollowup(input)
 
 	return &AgentOutput{
@@ -265,6 +292,20 @@ func (a *FollowupAgent) Execute(ctx context.Context, input AgentInput) (*AgentOu
 }
 
 // generateFollowup 生成追问
+func (a *FollowupAgent) executeLLMFollowup(ctx context.Context, input AgentInput) (*AgentOutput, error) {
+	system := "你负责生成下一轮面试问题。基于上轮回答质量决定难度。只输出一个问题，用中文。"
+	var messages []LLMMessage
+	for _, msg := range input.History {
+		role := "user"
+		if msg.Role == "interviewer" || msg.Role == "followup_generator" { role = "assistant" }
+		messages = append(messages, LLMMessage{Role: role, Content: msg.Content})
+	}
+	messages = append(messages, LLMMessage{Role: "user", Content: "请生成下一个面试问题。"})
+	resp, err := a.provider.ChatWithSystem(ctx, system, messages)
+	if err != nil { return nil, err }
+	return &AgentOutput{Content: resp, NextAction: "next_step"}, nil
+}
+
 func (a *FollowupAgent) generateFollowup(input AgentInput) string {
 	if input.Score == nil {
 		return "请继续深入解释一下。"
@@ -289,7 +330,8 @@ func (a *FollowupAgent) generateFollowup(input AgentInput) string {
 
 // AnalyzerAgent 知识盲区分析器 Agent
 type AnalyzerAgent struct {
-	name string
+	name     string
+	provider LLMProvider
 }
 
 // NewAnalyzerAgent 创建知识盲区分析器 Agent
@@ -306,7 +348,7 @@ func (a *AnalyzerAgent) Role() AgentRole {
 }
 
 func (a *AnalyzerAgent) Execute(ctx context.Context, input AgentInput) (*AgentOutput, error) {
-	// 分析知识盲区
+	if a.provider != nil { return a.executeLLMAnalyze(ctx, input) }
 	analysis := a.analyze(input)
 
 	return &AgentOutput{
@@ -318,6 +360,21 @@ func (a *AnalyzerAgent) Execute(ctx context.Context, input AgentInput) (*AgentOu
 }
 
 // analyze 分析
+func (a *AnalyzerAgent) executeLLMAnalyze(ctx context.Context, input AgentInput) (*AgentOutput, error) {
+	system := "你是面试分析官。根据面试历史生成最终评估。输出：技术评级(junior/mid/senior)、是否通过、优势领域、薄弱环节、学习计划、总结。用中文。"
+	var messages []LLMMessage
+	for _, msg := range input.History {
+		role := "user"
+		if msg.Role == "interviewer" || msg.Role == "evaluator" { role = "assistant" }
+		messages = append(messages, LLMMessage{Role: role, Content: msg.Content})
+	}
+	messages = append(messages, LLMMessage{Role: "user", Content: "请生成面试最终评估报告。"})
+	resp, err := a.provider.ChatWithSystem(ctx, system, messages)
+	if err != nil { return nil, err }
+	analysis := Analysis{Level: "mid", Pass: true, StrongAreas: []string{}, WeakAreas: []string{}, StudyPlan: []StudyItem{}, Summary: resp}
+	return &AgentOutput{Content: resp, Analysis: &analysis, Done: true, NextAction: "end"}, nil
+}
+
 func (a *AnalyzerAgent) analyze(input AgentInput) Analysis {
 	analysis := Analysis{
 		StrongAreas: []string{},
@@ -428,6 +485,32 @@ func (a *AnalyzerAgent) analyze(input AgentInput) Analysis {
 // ============================================================
 // 辅助函数
 // ============================================================
+
+func (a *EvaluatorAgent) executeLLMEval(ctx context.Context, input AgentInput) (*AgentOutput, error) {
+	system := "你是技术评估官。对候选人回答评分。输出格式：正确性:X/10 深度:X/10 清晰度:X/10 实用性:X/10 综合分:XX/100 优点:... 不足:... 遗漏:..."
+	question := input.Question
+	if question == "" {
+		for i := len(input.History)-1; i >= 0; i-- {
+			if input.History[i].Role == "interviewer" { question = input.History[i].Content; break }
+		}
+	}
+	messages := []LLMMessage{{Role: "user", Content: fmt.Sprintf("问题:%s\n\n回答:%s", question, input.Answer)}}
+	resp, err := a.provider.ChatWithSystem(ctx, system, messages)
+	if err != nil { return nil, err }
+	score := Score{Strengths: []string{}, Weaknesses: []string{}, Missing: []string{}}
+	var c, d, cl, p float64
+	for _, line := range strings.Split(resp, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "正确性:") { fmt.Sscanf(line, "正确性: %f/10", &c)
+		} else if strings.HasPrefix(line, "深度:") { fmt.Sscanf(line, "深度: %f/10", &d)
+		} else if strings.HasPrefix(line, "清晰度:") { fmt.Sscanf(line, "清晰度: %f/10", &cl)
+		} else if strings.HasPrefix(line, "实用性:") { fmt.Sscanf(line, "实用性: %f/10", &p)
+		} else if strings.HasPrefix(line, "综合分:") { fmt.Sscanf(line, "综合分: %f/100", &score.Total) }
+	}
+	score.Correctness, score.Depth, score.Clarity, score.Practical = int(c), int(d), int(cl), int(p)
+	if score.Total == 0 { score.Total = (c+d+cl+p) * 2.5 }
+	return &AgentOutput{Content: resp, Score: &score, NextAction: "next_step"}, nil
+}
 
 func getWeaknessFeedback(score *Score) string {
 	if len(score.Weaknesses) > 0 {

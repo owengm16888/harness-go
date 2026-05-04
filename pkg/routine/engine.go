@@ -14,6 +14,7 @@ type DefaultRoutineEngine struct {
 	instances map[string]*RoutineInstance
 	agents    map[string]AgentExecutor
 	config    EngineConfig
+	llm       LLMProvider
 }
 
 // EngineConfig 引擎配置
@@ -58,9 +59,12 @@ func (e *DefaultRoutineEngine) Create(ctx context.Context, config RoutineConfig)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// 设置默认值 (agent 配置 + workflow)
+	loader := NewConfigLoader("")
+	loader.setDefaults(&config)
+
 	instance := NewRoutineInstance(config)
 
-	// 设置默认值
 	if config.Settings.MaxRounds <= 0 {
 		config.Settings.MaxRounds = 10
 	}
@@ -125,10 +129,14 @@ func (e *DefaultRoutineEngine) executeWorkflow(ctx context.Context, instance *Ro
 
 		// 获取当前步骤
 		if instance.CurrentStep >= len(instance.Config.Workflow) {
-			// 工作流完成
-			instance.SetStatus(StatusCompleted)
-			e.generateFinalReport(ctx, instance)
-			return
+			// 工作流完成一轮 — 检查是否需要继续
+			if instance.Round >= instance.Config.Settings.MaxRounds {
+				instance.SetStatus(StatusCompleted)
+				e.generateFinalReport(ctx, instance)
+				return
+			}
+			// 重置到第一步开始新一轮
+			instance.CurrentStep = 0
 		}
 
 		step := instance.Config.Workflow[instance.CurrentStep]
@@ -155,9 +163,9 @@ func (e *DefaultRoutineEngine) executeWorkflow(ctx context.Context, instance *Ro
 		if step.Until != "" {
 			// 检查终止条件
 			if e.checkUntilCondition(instance, step.Until) {
-				instance.CurrentStep++
+				instance.CurrentStep++ // 超过最大轮次，进入下一步 (final_review)
 			}
-			// 否则继续当前步骤
+			// 否则继续当前步骤 (repeat_loop)
 		} else {
 			instance.CurrentStep++
 		}
@@ -265,10 +273,20 @@ func (e *DefaultRoutineEngine) processAgentOutput(instance *RoutineInstance, ste
 		}
 	}
 
-	// 处理下一轮
-	if output.NextAction == "next_round" {
+	// 处理 NextAction
+	switch output.NextAction {
+	case "next_round":
 		instance.Round++
 		instance.CurrentStep = 0 // 回到工作流开始
+	case "next_step":
+		// followup_generator 完成 = 一轮结束，递增轮次
+		if step.Agent == "followup_generator" {
+			instance.Round++
+		}
+	case "wait_answer":
+		// 等待候选人回答 (由 needsCandidateInput 暂停)
+	case "end":
+		// 面试结束
 	}
 }
 
@@ -476,6 +494,23 @@ func (e *DefaultRoutineEngine) generateFinalReport(ctx context.Context, instance
 }
 
 // RegisterAgent 注册 Agent
+// SetLLMProvider 设置 LLM 提供者，自动注入到所有支持 LLM 的 Agent
+func (e *DefaultRoutineEngine) SetLLMProvider(p LLMProvider) {
+	e.llm = p
+	for _, agent := range e.agents {
+		switch a := agent.(type) {
+		case *InterviewerAgent:
+			a.provider = p
+		case *EvaluatorAgent:
+			a.provider = p
+		case *FollowupAgent:
+			a.provider = p
+		case *AnalyzerAgent:
+			a.provider = p
+		}
+	}
+}
+
 func (e *DefaultRoutineEngine) RegisterAgent(name string, agent AgentExecutor) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

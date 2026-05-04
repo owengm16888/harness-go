@@ -176,3 +176,10 @@ docs/interview/
 
 > 生成模型: mimo-v2-pro (custom)
 > 存档时间: 2026-05-03
+
+
+## 模拟面试记录
+
+| 日期 | 模式 | 文件 | 平均分 |
+|------|------|------|--------|
+| 2026-05-04 | Routine + LLM (Claude) | [routine-llm-session-20260504.md](routine-llm-session-20260504.md) | 22.3/100 |

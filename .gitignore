@@ -33,3 +33,12 @@ data/
 # Build
 /dist/
 /build/
+
+# Root-level compiled binaries (not cmd/ source dirs)
+/routine-full
+/routine-live
+/routine-runner
+/routine-step
+
+# Claude
+.claude/

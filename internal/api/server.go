@@ -83,6 +83,17 @@ func (s *Server) setupRoutes() {
 	// 适配器 API
 	v1.HandleFunc("/adapters", s.listAdapters).Methods("GET")
 	v1.HandleFunc("/adapters/{name}/state", s.getAdapterState).Methods("GET")
+
+	// Agent 注册 API
+	v1.HandleFunc("/agents", s.registerAgent).Methods("POST")
+	v1.HandleFunc("/agents", s.listAgents).Methods("GET")
+	v1.HandleFunc("/agents/{id}", s.getAgent).Methods("GET")
+
+	// 协作 API
+	v1.HandleFunc("/collaborations", s.startCollaboration).Methods("POST")
+	v1.HandleFunc("/collaborations", s.listCollaborations).Methods("GET")
+	v1.HandleFunc("/collaborations/{id}", s.getCollaboration).Methods("GET")
+	v1.HandleFunc("/collaborations/{id}/run", s.runCollaboration).Methods("POST")
 }
 
 // Start 启动服务器
@@ -596,6 +607,130 @@ func (s *Server) getAdapterState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, state)
+}
+
+// ========== Agent 注册 API ==========
+
+// registerAgent 注册 Agent
+func (s *Server) registerAgent(w http.ResponseWriter, r *http.Request) {
+	var req models.RegisterAgentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// 构建 Agent
+	agentID := fmt.Sprintf("agent-%d", time.Now().UnixNano())
+	agent := &models.Agent{
+		ID:            agentID,
+		Name:          req.Name,
+		Adapter:       req.Adapter,
+		Role:          req.Role,
+		Capabilities:  req.Capabilities,
+		Constraints:   req.Constraints,
+		Metadata:      req.Metadata,
+		MaxConcurrent: req.MaxConcurrent,
+	}
+
+	if agent.MaxConcurrent == 0 {
+		agent.MaxConcurrent = 1
+	}
+
+	if err := s.engine.Registry().Register(agent); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusCreated, agent)
+}
+
+// listAgents 列出所有 Agent
+func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
+	agents := s.engine.Registry().List()
+	if agents == nil {
+		agents = []*models.Agent{}
+	}
+	s.writeJSON(w, http.StatusOK, agents)
+}
+
+// getAgent 获取单个 Agent
+func (s *Server) getAgent(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	agent, err := s.engine.Registry().Get(id)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, agent)
+}
+
+// ========== 协作 API ==========
+
+// startCollaboration 发起协作
+func (s *Server) startCollaboration(w http.ResponseWriter, r *http.Request) {
+	var req models.StartCollaborationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// 设置默认 TaskID
+	if req.TaskID == "" {
+		req.TaskID = req.Task.ID
+	}
+
+	ctx := r.Context()
+
+	collab, err := s.engine.Orchestrator().StartCollaboration(ctx, req)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusCreated, collab)
+}
+
+// listCollaborations 列出所有协作会话
+func (s *Server) listCollaborations(w http.ResponseWriter, r *http.Request) {
+	collabs := s.engine.Orchestrator().ListCollaborations()
+	if collabs == nil {
+		collabs = []*models.Collaboration{}
+	}
+	s.writeJSON(w, http.StatusOK, collabs)
+}
+
+// getCollaboration 获取单个协作会话
+func (s *Server) getCollaboration(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	collab, err := s.engine.Orchestrator().GetCollaboration(id)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, collab)
+}
+
+// runCollaboration 执行协作
+func (s *Server) runCollaboration(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	ctx := r.Context()
+
+	if err := s.engine.Orchestrator().Run(ctx, id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// 返回更新后的协作状态
+	collab, _ := s.engine.Orchestrator().GetCollaboration(id)
+	s.writeJSON(w, http.StatusOK, collab)
 }
 
 // 辅助方法

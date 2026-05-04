@@ -152,34 +152,34 @@ func (idx *Indexer) Search(ctx context.Context, query string, limit int) ([]stri
 	scores := make(map[string]float64)
 
 	for _, term := range queryTokens {
-		entryMap, exists := idx.termFreq[term]
-		// 也检查子串匹配
-		if !exists {
-			for indexTerm, em := range idx.termFreq {
-				if strings.Contains(indexTerm, term) || strings.Contains(term, indexTerm) {
-					if entryMap == nil {
-						entryMap = em
-					} else {
-						for id, freq := range em {
-							entryMap[id] += freq
-						}
+		// 收集包含该 term 的所有条目
+		matchingEntries := make(map[string]int) // entryID → tf
+
+		for entryID, tfMap := range idx.termFreq {
+			if tf, exists := tfMap[term]; exists {
+				matchingEntries[entryID] = tf
+			} else {
+				// 子串匹配: term 包含 indexTerm 或 indexTerm 包含 term
+				for indexTerm, tf := range tfMap {
+					if strings.Contains(indexTerm, term) || strings.Contains(term, indexTerm) {
+						matchingEntries[entryID] += tf
 					}
 				}
 			}
 		}
 
-		if len(entryMap) == 0 {
+		if len(matchingEntries) == 0 {
 			continue
 		}
 
 		// IDF = log(N / df)
-		df := float64(len(entryMap))
+		df := float64(len(matchingEntries))
 		if df == 0 {
 			df = 1
 		}
 		idf := math.Log(float64(idx.totalDocs) / df)
 
-		for entryID, tf := range entryMap {
+		for entryID, tf := range matchingEntries {
 			// TF = 1 + log(tf)
 			tfScore := 1.0 + math.Log(float64(tf))
 			scores[entryID] += tfScore * idf
@@ -195,14 +195,13 @@ func (idx *Indexer) Search(ctx context.Context, query string, limit int) ([]stri
 	for id, score := range scores {
 		sorted = append(sorted, scoredEntry{id, score})
 	}
-	sslice := sorted
-	sort.Slice(sslice, func(i, j int) bool {
-		return sslice[i].score > sslice[j].score
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].score > sorted[j].score
 	})
 
 	// 取 top-N
 	var results []string
-	for i, se := range sslice {
+	for i, se := range sorted {
 		if i >= limit {
 			break
 		}
