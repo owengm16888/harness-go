@@ -19,55 +19,65 @@ func main() {
 	file = f
 	defer file.Close()
 
-	write("# Go 模拟面试 — LLM 生成完整答案\n\n")
+	write("# Go 模拟面试 — LLM 完整记录\n\n")
 	write("> 时间: %s\n> 引擎: Harness Routine + Claude CLI\n\n---\n\n")
 
 	llm := routine.NewClaudeCLIProvider()
+	engine := routine.NewRoutineEngine(routine.EngineConfig{EnableScoring: true})
+	engine.SetLLMProvider(llm)
 
 	config := routine.RoutineConfig{
 		Name: "Go面试", Type: routine.TypeInterview,
-		Settings: routine.RoutineSettings{MaxRounds: 5, Timeout: 10 * time.Minute},
+		Settings: routine.RoutineSettings{MaxRounds: 3, Timeout: 10 * time.Minute},
 	}
-
-	engine := routine.NewRoutineEngine(routine.EngineConfig{EnableScoring: true})
-	engine.SetLLMProvider(llm)
 
 	inst, _ := engine.Create(context.Background(), config)
 	fmt.Printf("面试: %s | 文件: %s\n\n", inst.ID, outPath)
 
+	// 启动面试 → 第一题
 	engine.Start(context.Background(), inst.ID)
-	waitStable(engine, inst.ID, 0)
-	saved := dumpNew(engine, inst.ID, 0)
+	time.Sleep(15 * time.Second)
+	saved := dumpAll(engine, inst.ID, 0)
 
-	// 每轮: LLM 提问 → LLM 生成完整答案 + 总结 + 口头版
-	for round := 1; round <= 5; round++ {
+	for round := 1; round <= 3; round++ {
 		fmt.Printf("\n--- 第 %d 轮 ---\n", round)
 
-		// LLM 生成完整答案
+		// 生成详细答案
 		write("\n---\n\n## 📝 第 %d 轮 — LLM 生成答案\n\n", round)
 		fmt.Printf("📝 生成答案中...\n")
-
 		genAnswer(llm, inst, round)
-		waitStable(engine, inst.ID, saved)
-		saved = dumpNew(engine, inst.ID, saved)
 
-		// 提交触发下一题
-		engine.SubmitAnswer(context.Background(), inst.ID, fmt.Sprintf("第%d轮完成，请继续", round))
-		waitStable(engine, inst.ID, saved)
-		saved = dumpNew(engine, inst.ID, saved)
+		// 提交答案 → 触发评估 + 追问 + 下一题
+		fmt.Printf("📤 提交答案，等待评估+追问+下一题...\n")
+		engine.SubmitAnswer(context.Background(), inst.ID, fmt.Sprintf("第%d轮完成", round))
+
+		// 固定等待: 评估(~15s) + 追问(~15s) + 下一题(~15s) = ~45s
+		time.Sleep(60 * time.Second)
+		saved = dumpAll(engine, inst.ID, saved)
 	}
 
-	// 最终总结
-	write("\n---\n\n## 📊 面试结束\n\n")
+	// 最终分析
+	fmt.Printf("\n📋 最终分析...\n")
+	engine.SubmitAnswer(context.Background(), inst.ID, "__finalize__")
+	time.Sleep(30 * time.Second)
+	dumpAll(engine, inst.ID, saved)
+
+	// 评分统计
 	state, _ := engine.GetInstance(context.Background(), inst.ID)
-	write("总轮次: %d\n", state.Round)
+	write("\n---\n\n## 📊 面试统计\n\n| 轮次 | 得分 |\n|------|------|\n")
+	var total float64
+	for _, s := range state.Scores {
+		write("| %d | %.1f/100 |\n", s.Round+1, s.Score.Total)
+		total += s.Score.Total
+	}
+	if len(state.Scores) > 0 {
+		write("| **平均** | **%.1f/100** |\n", total/float64(len(state.Scores)))
+	}
 
 	fmt.Printf("\n✅ 已保存: %s\n", outPath)
 }
 
-// genAnswer 让 LLM 生成详细答案 + 总结 + 口头版
 func genAnswer(llm routine.LLMProvider, inst *routine.RoutineInstance, round int) {
-	// 获取最新问题
 	history := inst.GetHistory()
 	var question string
 	for i := len(history) - 1; i >= 0; i-- {
@@ -77,62 +87,32 @@ func genAnswer(llm routine.LLMProvider, inst *routine.RoutineInstance, round int
 		}
 	}
 
-	system := `你是 Go 语言面试专家。请根据面试题目，生成三个版本的答案：
+	system := `你是 Go 语言面试专家。生成三个版本的答案：
+1. **详细完整答案**：核心原理+代码示例+边界情况+最佳实践
+2. **一句话总结**：一句话概括
+3. **口头简答**：2-3句口语化
 
-1. **详细完整答案**：包含核心原理、代码示例、边界情况、最佳实践。结构清晰，适合学习。
-2. **一句话总结**：用一句话概括核心要点，便于记忆。
-3. **口头简答**：模拟候选人面试时的口头回答，2-3 句话，自然口语化，突出关键点。
-
-请严格按以下格式输出：
-
+格式：
 ### 详细完整答案
-（完整内容，含代码）
-
+(内容)
 ### 一句话总结
-（一句话）
-
+(一句话)
 ### 口头简答
-（2-3 句口语化回答）`
+(2-3句)`
 
 	messages := []routine.LLMMessage{
-		{Role: "user", Content: fmt.Sprintf("面试题目：\n%s\n\n请生成三个版本的答案。", question)},
+		{Role: "user", Content: fmt.Sprintf("题目：\n%s\n\n生成三个版本。", question)},
 	}
-
 	resp, err := llm.ChatWithSystem(context.Background(), system, messages)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "生成失败: %v\n", err)
 		return
 	}
-
 	write("%s\n\n", resp)
 	fmt.Printf("✅ 答案已生成\n")
 }
 
-func waitStable(engine *routine.DefaultRoutineEngine, id string, lastSeen int) {
-	prevCount := lastSeen
-	idle := 0
-	for i := 0; i < 120; i++ {
-		time.Sleep(5 * time.Second)
-		inst, _ := engine.GetInstance(context.Background(), id)
-		current := len(inst.GetHistory())
-		if current == prevCount {
-			idle++
-			if idle >= 2 {
-				return
-			}
-		} else {
-			idle = 0
-			prevCount = current
-			fmt.Printf("  ... %d 条消息\n", current)
-		}
-		if inst.Status == routine.StatusCompleted {
-			time.Sleep(3 * time.Second)
-			return
-		}
-	}
-}
-
-func dumpNew(engine *routine.DefaultRoutineEngine, id string, lastSeen int) int {
+func dumpAll(engine *routine.DefaultRoutineEngine, id string, lastSeen int) int {
 	inst, _ := engine.GetInstance(context.Background(), id)
 	history := inst.GetHistory()
 	for i := lastSeen; i < len(history); i++ {
@@ -140,16 +120,16 @@ func dumpNew(engine *routine.DefaultRoutineEngine, id string, lastSeen int) int 
 		switch msg.Role {
 		case "interviewer":
 			write("## 🎤 面试官提问\n\n%s\n\n", msg.Content)
-			fmt.Printf("🎤 %s\n", trunc(msg.Content, 120))
+			fmt.Printf("🎤 %s\n", trunc(msg.Content, 100))
 		case "evaluator":
 			write("## 📊 LLM 评估\n\n%s\n\n", msg.Content)
-			fmt.Printf("📊 %s\n", trunc(msg.Content, 120))
+			fmt.Printf("📊 %s\n", trunc(msg.Content, 100))
 		case "followup_generator":
-			write("## 🔄 追问/下一题\n\n%s\n\n", msg.Content)
-			fmt.Printf("🔄 %s\n", trunc(msg.Content, 120))
+			write("## 🔄 LLM 追问\n\n%s\n\n", msg.Content)
+			fmt.Printf("🔄 %s\n", trunc(msg.Content, 100))
 		case "knowledge_gap_analyzer":
-			write("## 📋 分析\n\n%s\n\n", msg.Content)
-			fmt.Printf("📋 %s\n", trunc(msg.Content, 120))
+			write("## 📋 最终分析\n\n%s\n\n", msg.Content)
+			fmt.Printf("📋 %s\n", trunc(msg.Content, 100))
 		}
 	}
 	return len(history)

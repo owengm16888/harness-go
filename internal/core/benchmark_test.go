@@ -156,54 +156,7 @@ func BenchmarkFeedbackLoop_Process(b *testing.B) {
 	}
 }
 
-// ============================================================
-// Learner 基准测试
-// ============================================================
-
-func BenchmarkLearner_Observe(b *testing.B) {
-	learner := NewLearner(5, 0.7)
-	ctx := context.Background()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		learner.Observe(ctx, models.Observation{
-			Task: models.Task{
-				ID:      fmt.Sprintf("t-%d", i),
-				Type:    "implement",
-				Context: map[string]any{"environment": "dev"},
-			},
-			Result:    models.Result{Metrics: models.Metrics{Duration: time.Second}},
-			Success:   true,
-			Timestamp: time.Now(),
-		})
-	}
-}
-
-func BenchmarkLearner_Predict(b *testing.B) {
-	learner := NewLearner(3, 0.5)
-	ctx := context.Background()
-
-	// 预填充模式
-	for i := 0; i < 50; i++ {
-		learner.Observe(ctx, models.Observation{
-			Task: models.Task{
-				ID: fmt.Sprintf("t-%d", i), Type: "implement",
-				Context: map[string]any{"environment": "dev"},
-			},
-			Result: models.Result{Metrics: models.Metrics{Duration: time.Second}},
-			Success: true, Timestamp: time.Now(),
-		})
-	}
-
-	task := models.Task{
-		Type: "implement", Context: map[string]any{"environment": "dev"},
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		learner.Predict(ctx, task)
-	}
-}
+// Learner 基准测试已移至 internal/learning/ 包
 
 // ============================================================
 // Indexer 基准测试

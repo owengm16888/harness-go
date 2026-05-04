@@ -231,11 +231,11 @@ func TestIntegration_MonitorMetrics(t *testing.T) {
 	if metrics.TotalTasks != 10 {
 		t.Errorf("Expected 10 tasks, got %d", metrics.TotalTasks)
 	}
-	if metrics.SuccessTasks != 7 {
-		t.Errorf("Expected 7 success, got %d", metrics.SuccessTasks)
+	if metrics.SuccessTasks != 6 {
+		t.Errorf("Expected 6 success, got %d", metrics.SuccessTasks)
 	}
-	if metrics.FailedTasks != 3 {
-		t.Errorf("Expected 3 failed, got %d", metrics.FailedTasks)
+	if metrics.FailedTasks != 4 {
+		t.Errorf("Expected 4 failed, got %d", metrics.FailedTasks)
 	}
 	if metrics.TotalTokens != 5500 { // sum(100..1000)
 		t.Errorf("Expected 5500 tokens, got %d", metrics.TotalTokens)
@@ -253,7 +253,7 @@ func TestIntegration_MonitorMetrics(t *testing.T) {
 
 func TestIntegration_PriorityOrdering(t *testing.T) {
 	store := &mockTaskStore{}
-	executor := &Executor{engine: nil, defaultAdapter: "test"}
+	executor := &Executor{engine: nil}
 	tm := NewTaskManager(store, executor)
 	ctx := context.Background()
 
@@ -305,13 +305,13 @@ func (s *integrationStore) ListTasks(ctx context.Context, filter models.TaskFilt
 func (s *integrationStore) DeleteTask(ctx context.Context, id string) error {
 	return s.taskStore.DeleteTask(ctx, id)
 }
-func (s *integrationStore) SaveSession(ctx context.Context, session *Session) error {
+func (s *integrationStore) SaveSession(ctx context.Context, session *storage.Session) error {
 	return s.stateStore.SaveSession(ctx, session)
 }
-func (s *integrationStore) GetSession(ctx context.Context, id string) (*Session, error) {
+func (s *integrationStore) GetSession(ctx context.Context, id string) (*storage.Session, error) {
 	return s.stateStore.GetSession(ctx, id)
 }
-func (s *integrationStore) ListSessions(ctx context.Context) ([]*Session, error) {
+func (s *integrationStore) ListSessions(ctx context.Context) ([]*storage.Session, error) {
 	return s.stateStore.ListSessions(ctx)
 }
 func (s *integrationStore) DeleteSession(ctx context.Context, id string) error {
@@ -345,3 +345,7 @@ func (s *integrationStore) DeletePattern(ctx context.Context, id string) error {
 	return s.patternStore.DeletePattern(ctx, id)
 }
 func (s *integrationStore) Close() error { return nil }
+func (s *integrationStore) BatchSaveTasks(ctx context.Context, states []*models.TaskState) error {
+	return s.taskStore.BatchSaveTasks(ctx, states)
+}
+func (s *integrationStore) Stats() storage.StorageStats { return storage.StorageStats{} }

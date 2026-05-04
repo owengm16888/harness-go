@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 
 func TestTaskManager_CreateTask(t *testing.T) {
 	store := &mockTaskStore{}
-	executor := &Executor{engine: nil, defaultAdapter: "test"}
+	executor := &Executor{engine: nil}
 	tm := NewTaskManager(store, executor)
 
 	task := models.Task{
@@ -40,7 +41,7 @@ func TestTaskManager_CreateTask(t *testing.T) {
 
 func TestTaskManager_CreateTask_Validation(t *testing.T) {
 	store := &mockTaskStore{}
-	executor := &Executor{engine: nil, defaultAdapter: "test"}
+	executor := &Executor{engine: nil}
 	tm := NewTaskManager(store, executor)
 
 	// 缺少 ID
@@ -78,7 +79,7 @@ func TestTaskManager_CreateTask_Validation(t *testing.T) {
 
 func TestTaskManager_CancelTask(t *testing.T) {
 	store := &mockTaskStore{}
-	executor := &Executor{engine: nil, defaultAdapter: "test"}
+	executor := &Executor{engine: nil}
 	tm := NewTaskManager(store, executor)
 
 	task := models.Task{
@@ -103,7 +104,7 @@ func TestTaskManager_CancelTask(t *testing.T) {
 
 func TestTaskManager_CancelNonexistentTask(t *testing.T) {
 	store := &mockTaskStore{}
-	executor := &Executor{engine: nil, defaultAdapter: "test"}
+	executor := &Executor{engine: nil}
 	tm := NewTaskManager(store, executor)
 
 	ctx := context.Background()
@@ -555,9 +556,26 @@ func (m *mockTaskStore) GetTask(ctx context.Context, id string) (*models.TaskSta
 	return nil, nil
 }
 func (m *mockTaskStore) ListTasks(ctx context.Context, filter models.TaskFilter) ([]*models.TaskState, error) {
-	return nil, nil
+	var tasks []*models.TaskState
+	for _, t := range m.tasks {
+		tasks = append(tasks, t)
+	}
+	// 按优先级降序排序
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].Task.Priority > tasks[j].Task.Priority
+	})
+	return tasks, nil
 }
 func (m *mockTaskStore) DeleteTask(ctx context.Context, id string) error {
+	return nil
+}
+func (m *mockTaskStore) BatchSaveTasks(ctx context.Context, states []*models.TaskState) error {
+	if m.tasks == nil {
+		m.tasks = make(map[string]*models.TaskState)
+	}
+	for _, s := range states {
+		m.tasks[s.Task.ID] = s
+	}
 	return nil
 }
 
